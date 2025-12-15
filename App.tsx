@@ -6,6 +6,8 @@ import Navbar from './components/Navbar';
 import OfferCard from './components/OfferCard';
 import OfferModal from './components/OfferModal';
 import AdminDashboard from './components/AdminDashboard';
+import OfflineScreen from './components/OfflineScreen';
+import InstallPrompt from './components/InstallPrompt';
 import { fetchOffers, trackOfferClick, fetchUserTotalClicks } from './services/offerService';
 import { fetchUserProfile } from './services/adminService';
 import { Offer } from './types';
@@ -14,6 +16,9 @@ const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  
+  // Network State
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   // App State
   const [isAdmin, setIsAdmin] = useState(false);
@@ -25,6 +30,62 @@ const App: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [clickCount, setClickCount] = useState(0);
   const [loadingOffers, setLoadingOffers] = useState(false);
+
+  // PWA Install State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+
+  // PWA Install Event Listener
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      // Prevent Chrome 67 and earlier from automatically showing the prompt
+      e.preventDefault();
+      // Stash the event so it can be triggered later.
+      setDeferredPrompt(e);
+      // Update UI to notify the user they can add to home screen
+      setShowInstallPrompt(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // If running in standalone mode (already installed), hide the prompt
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+        setShowInstallPrompt(false);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (!deferredPrompt) return;
+    
+    // Show the install prompt
+    deferredPrompt.prompt();
+    
+    // Wait for the user to respond to the prompt
+    const { outcome } = await deferredPrompt.userChoice;
+    
+    if (outcome === 'accepted') {
+        setShowInstallPrompt(false);
+    }
+    setDeferredPrompt(null);
+  };
+
+  // Network Monitoring
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -53,6 +114,10 @@ const App: React.FC = () => {
 
   const checkUserRole = async (userId: string) => {
       try {
+          if (!navigator.onLine) {
+              setLoading(false);
+              return;
+          }
           const profile = await fetchUserProfile(userId);
           setIsAdmin(profile?.role === 'admin');
       } catch (err) {
@@ -63,7 +128,7 @@ const App: React.FC = () => {
   };
 
   const loadData = useCallback(async () => {
-    if (!user) return;
+    if (!user || !navigator.onLine) return;
     setLoadingOffers(true);
     try {
       const [fetchedOffers, count] = await Promise.all([
@@ -80,10 +145,10 @@ const App: React.FC = () => {
   }, [user]);
 
   useEffect(() => {
-    if (user && currentPage === 'dashboard') {
+    if (user && currentPage === 'dashboard' && isOnline) {
       loadData();
     }
-  }, [user, currentPage, loadData]);
+  }, [user, currentPage, isOnline, loadData]);
 
   const handleOfferClick = (offer: Offer) => {
     setSelectedOffer(offer);
@@ -105,6 +170,12 @@ const App: React.FC = () => {
     }
   };
 
+  // 1. Show Offline Screen immediately if network is lost
+  if (!isOnline) {
+      return <OfflineScreen onRetry={() => window.location.reload()} />;
+  }
+
+  // 2. Loading State
   if (loading) {
     return (
       <div className="min-h-screen bg-[#eef2f6] flex items-center justify-center">
@@ -113,13 +184,15 @@ const App: React.FC = () => {
     );
   }
 
+  // 3. Auth State
   if (!session) {
     // Render AuthForm without layout constraints so it can control full screen on mobile
     return <AuthForm />;
   }
 
+  // 4. Main App UI
   return (
-    <div className="min-h-screen bg-[#eef2f6] pb-20">
+    <div className="min-h-screen bg-[#eef2f6] pb-20 relative">
       <Navbar 
         userEmail={user?.email} 
         clickCount={clickCount} 
@@ -203,6 +276,14 @@ const App: React.FC = () => {
           onClose={handleCloseModal}
           onComplete={handleCompleteOffer}
       />
+      
+      {/* Install App Prompt */}
+      {showInstallPrompt && (
+          <InstallPrompt 
+            onInstall={handleInstallApp}
+            onDismiss={() => setShowInstallPrompt(false)}
+          />
+      )}
     </div>
   );
 };
