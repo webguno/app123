@@ -5,7 +5,9 @@ import AuthForm from './components/AuthForm';
 import Navbar from './components/Navbar';
 import OfferCard from './components/OfferCard';
 import OfferModal from './components/OfferModal';
+import AdminDashboard from './components/AdminDashboard';
 import { fetchOffers, trackOfferClick, fetchUserTotalClicks } from './services/offerService';
+import { fetchUserProfile } from './services/adminService';
 import { Offer } from './types';
 
 const App: React.FC = () => {
@@ -13,6 +15,10 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   
+  // App State
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [currentPage, setCurrentPage] = useState<'dashboard' | 'admin'>('dashboard');
+
   // Dashboard State
   const [offers, setOffers] = useState<Offer[]>([]);
   const [selectedOffer, setSelectedOffer] = useState<Offer | null>(null);
@@ -21,23 +27,40 @@ const App: React.FC = () => {
   const [loadingOffers, setLoadingOffers] = useState(false);
 
   useEffect(() => {
-    // Check active session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
-      setLoading(false);
+      if (session?.user) {
+         checkUserRole(session.user.id);
+      } else {
+         setLoading(false);
+      }
     });
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
-      setLoading(false);
+      if (session?.user) {
+         checkUserRole(session.user.id);
+      } else {
+         setLoading(false);
+         setIsAdmin(false);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  const checkUserRole = async (userId: string) => {
+      try {
+          const profile = await fetchUserProfile(userId);
+          setIsAdmin(profile?.role === 'admin');
+      } catch (err) {
+          console.error("Error checking role", err);
+      } finally {
+          setLoading(false);
+      }
+  };
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -57,10 +80,10 @@ const App: React.FC = () => {
   }, [user]);
 
   useEffect(() => {
-    if (user) {
+    if (user && currentPage === 'dashboard') {
       loadData();
     }
-  }, [user, loadData]);
+  }, [user, currentPage, loadData]);
 
   const handleOfferClick = (offer: Offer) => {
     setSelectedOffer(offer);
@@ -76,86 +99,109 @@ const App: React.FC = () => {
     if (!user) return;
     try {
       await trackOfferClick(offerId, user.id);
-      // Update local count optimistically or refetch
       setClickCount(prev => prev + 1);
-      // In a real app, maybe show a toast notification here
-      console.log('Offer tracked successfully');
     } catch (error) {
       console.error('Failed to track offer', error);
-      // Handle error (e.g. toast)
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      <div className="min-h-screen bg-[#eef2f6] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
 
   if (!session) {
+    // Render AuthForm without layout constraints so it can control full screen on mobile
     return <AuthForm />;
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-12">
-      <Navbar userEmail={user?.email} clickCount={clickCount} />
+    <div className="min-h-screen bg-[#eef2f6] pb-20">
+      <Navbar 
+        userEmail={user?.email} 
+        clickCount={clickCount} 
+        isAdmin={isAdmin}
+        currentPage={currentPage}
+        onAdminClick={() => setCurrentPage('admin')}
+        onDashboardClick={() => setCurrentPage('dashboard')}
+      />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Available Tasks</h1>
-          <p className="mt-2 text-gray-600">Select a task to view details and complete it.</p>
-        </div>
-
-        {loadingOffers ? (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {[1, 2, 3].map((n) => (
-                <div key={n} className="bg-white rounded-xl shadow-sm p-6 h-48 animate-pulse">
-                  <div className="flex items-center gap-4 mb-4">
-                     <div className="h-14 w-14 bg-gray-200 rounded-xl"></div>
-                     <div className="space-y-2 flex-1">
-                        <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                        <div className="h-3 bg-gray-200 rounded w-1/2"></div>
-                     </div>
-                  </div>
-                  <div className="space-y-2">
-                     <div className="h-3 bg-gray-200 rounded w-full"></div>
-                     <div className="h-3 bg-gray-200 rounded w-5/6"></div>
-                  </div>
-                </div>
-              ))}
-           </div>
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+        {currentPage === 'admin' && isAdmin ? (
+            <AdminDashboard />
         ) : (
-          <>
-            {offers.length === 0 ? (
-              <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-gray-300">
-                <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                  <path vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-                </svg>
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No tasks available</h3>
-                <p className="mt-1 text-sm text-gray-500">Check back later for new offers.</p>
+          <div>
+              {/* Stats Card */}
+              <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 rounded-2xl p-6 mb-8 text-white shadow-lg shadow-indigo-200">
+                <div className="flex justify-between items-start">
+                    <div>
+                        <p className="text-indigo-100 text-sm font-medium">Total Completed</p>
+                        <h2 className="text-4xl font-bold mt-1">{clickCount}</h2>
+                    </div>
+                    <div className="bg-white/20 p-3 rounded-xl">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </div>
+                </div>
+                <div className="mt-6 flex items-center gap-2">
+                     <span className="text-xs bg-white/20 px-3 py-1 rounded-full font-medium">Level 1 User</span>
+                     <span className="text-sm text-indigo-100">Keep up the good work!</span>
+                </div>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {offers.map((offer) => (
-                  <OfferCard 
-                    key={offer.id} 
-                    offer={offer} 
-                    onClick={handleOfferClick} 
-                  />
-                ))}
+
+              <div className="flex items-center justify-between mb-6">
+                 <h2 className="text-xl font-bold text-gray-900">Available Tasks</h2>
+                 <span className="text-sm text-gray-500 font-medium bg-white px-3 py-1 rounded-full shadow-sm">{offers.length} Found</span>
               </div>
-            )}
-          </>
+
+              {loadingOffers ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {[1, 2, 3].map((n) => (
+                        <div key={n} className="bg-white rounded-2xl p-4 shadow-sm h-28 animate-pulse flex items-center gap-4">
+                           <div className="h-16 w-16 bg-gray-200 rounded-xl"></div>
+                           <div className="flex-1 space-y-2">
+                                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                                <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                           </div>
+                        </div>
+                    ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {offers.length === 0 ? (
+                    <div className="col-span-full text-center py-16 flex flex-col items-center">
+                        <div className="bg-white p-4 rounded-full mb-4 shadow-sm">
+                            <svg className="h-10 w-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                            </svg>
+                        </div>
+                        <h3 className="text-lg font-medium text-gray-900">No tasks yet</h3>
+                        <p className="text-base text-gray-500 mt-1">Check back later for new offers.</p>
+                    </div>
+                    ) : (
+                        offers.map((offer) => (
+                        <OfferCard 
+                            key={offer.id} 
+                            offer={offer} 
+                            onClick={handleOfferClick} 
+                        />
+                        ))
+                    )}
+                </div>
+              )}
+          </div>
         )}
-      </main>
+      </div>
 
       <OfferModal 
-        offer={selectedOffer}
-        isOpen={isModalOpen}
-        onClose={handleCloseModal}
-        onComplete={handleCompleteOffer}
+          offer={selectedOffer}
+          isOpen={isModalOpen}
+          onClose={handleCloseModal}
+          onComplete={handleCompleteOffer}
       />
     </div>
   );
